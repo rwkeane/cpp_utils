@@ -3,8 +3,9 @@
 
 #include <ostream>
 #include <sstream>
-#include <utility>
+#include <string>
 #include <thread>
+#include <utility>
 
 namespace util {
 
@@ -28,7 +29,8 @@ namespace util {
 // TODO: Add fine-grained log level controls.
 #ifdef ENABLE_UTIL_LOGGING
 
-// NOTE: This call leaks memory by design.
+// TODO: This call leaks memory. Change the design to make it a user-defined
+// instance.
 #define INITIALIZE_LOGGER(info_stream, error_stream) \
     util::Logger::CreateGlobalInstance(std::move(info_stream), \
                                        std::move(error_stream))
@@ -82,26 +84,42 @@ class Logger {
     LogMessage(LogLevel level, const char* file, int line,
                std::thread::id thread_id)
         : level_(level), file_(file), line_(line), thread_id_(thread_id) {}
-
-    ~LogMessage() {
-      Logger::GetGlobalInstance()->LogMessageImpl(*this);
-      if (level_ == LogLevel::kFatal) {
-        // TODO: Exit program
-      }
+    LogMessage(const LogMessage& other) = delete;
+    LogMessage(LogMessage&& other)
+        : level_(other.level_),
+          line_(other.line_),
+          thread_id_(other.thread_id_),
+          file_(std::move(other.file_)),
+          stream_(std::move(other.stream_)) {
+      other.IsDoneLogging();
     }
 
+    LogMessage& operator=(const LogMessage& other) = delete;
+    LogMessage& operator=(LogMessage&& other) = default;
+
+    ~LogMessage() {
+      if (!should_log_) {
+        return;
+      }
+
+      Logger::GetGlobalInstance()->LogMessageImpl(std::move(*this));
+    }
+
+    // To be called when this object should no longer generate a log statement.
+    void IsDoneLogging() { should_log_ = false; }
+
+    // Accessors.
     std::ostream& stream() { return stream_; }
     const LogLevel level() const { return level_; }
-    const char* file() const { return file_; }
+    const std::string& file() const { return file_; }
+    const int line() const { return line_; }
     const std::thread::id& thread_id() const { return thread_id_; }
 
   protected:
-    const LogLevel level_;
+    bool should_log_ = true;
 
-    // The file here comes from the __FILE__ macro, which should persist while
-    // we are doing the logging. Hence, keeping it unmanaged here and not
-    // creating a copy should be safe.
-    const char* const file_;
+    const LogLevel level_;
+    std::string file_;
     const int line_;
     const std::thread::id thread_id_;
     std::stringstream stream_;
@@ -111,6 +129,9 @@ class Logger {
   virtual ~Logger() = default;
 
   // Creates the singleton Logger instance. May only be called once.
+  //
+  // TODO: The implementation is templated, so these don't need to be ostream
+  // types.
   static void CreateGlobalInstance(std::ostream& info_stream, std::ostream& error_stream);
 
   // Gets the global instance of the logger for this process.
@@ -121,8 +142,11 @@ class Logger {
     return LogMessage(level, file, line, std::this_thread::get_id());
   }
 
+  virtual void StopSoon() = 0;
+
  protected:
-  virtual void LogMessageImpl(LogMessage& msg) = 0;
+  // Implementation-specific logging function.
+  virtual void LogMessageImpl(LogMessage&& msg) = 0;
 };
 
 namespace internal {

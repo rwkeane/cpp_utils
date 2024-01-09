@@ -18,12 +18,14 @@ class WeakPtr {
   // Allow conversion from U to T provided U "is a" T. Note that this
   // is separate from the (implicit) copy and move constructors.
   template <typename U,
-            typename = std::enable_if_t<std::is_convertible_v<U*, T*>>>
+            typename = typename std::enable_if<
+                std::is_convertible<U*, T*>::value>::type>
   WeakPtr(const WeakPtr<U>& other)
 : ptr_(other.ptr_), is_valid_(other.is_valid) {}
 
   template <typename U,
-            typename = std::enable_if_t<std::is_convertible_v<U*, T*>>>
+            typename = typename std::enable_if<
+                std::is_convertible<U*, T*>::value>::type>
   WeakPtr& operator=(const WeakPtr<U>& other) {
     ptr_ = other.ptr_;
     is_valid_ = other.is_valid_;
@@ -31,12 +33,14 @@ class WeakPtr {
   }
 
   template <typename U,
-            typename = std::enable_if_t<std::is_convertible_v<U*, T*>>>
+            typename = typename std::enable_if<
+                std::is_convertible<U*, T*>::value>::type>
   WeakPtr(WeakPtr<U>&& other)
       : ptr_(std::move(other.ptr_)), is_valid_(std::move(other.is_valid_)) {}
 
   template <typename U,
-            typename = std::enable_if_t<std::is_convertible_v<U*, T*>>>
+            typename = typename std::enable_if<
+                std::is_convertible<U*, T*>::value>::type>
   WeakPtr& operator=(WeakPtr<U>&& other) {
     ptr_ = std::move(other.ptr_);
     is_valid_ = std::move(other.is_valid_);

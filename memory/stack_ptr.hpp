@@ -22,7 +22,7 @@ class StackDeleter {
 
 template<typename TType, typename... TArgs>
 StackPtr<TType> CreateStackPtr(uint8_t storage[sizeof(TType)], TArgs&&... args) {
-  return StackPtr<TType>(new (storage) TType, std::forward(args)...);
+  return StackPtr<TType>(new (storage) TType(std::forward<TArgs>(args)...));
 }
 
 }  // namespace util

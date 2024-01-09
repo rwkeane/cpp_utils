@@ -14,6 +14,14 @@ struct nullopt_t {
   explicit constexpr nullopt_t(bool) noexcept {}
 };
 
+constexpr nullopt_t nullopt(true);
+
+// This class defines an optional data type for use when a value may or may not
+// be available. This class is intended for STACK ALLOCATED DATA ONLY. For heap
+// allocated data, use an std::unique_ptr instead.
+//
+// TODO: Ensure that the copy / move ctors are properly deleted when the
+// underlying types don't support it.
 template<typename TType>
 class Optional {
  public:
@@ -27,108 +35,119 @@ class Optional {
   // NOTE: This should work as a copy / move ctor for the underlying data if the
   // type supports it.
   template<typename... TArgs,
-           typename std::enable_if<std::is_constructible<TType, TArgs...>>::type>
+           typename = typename std::enable_if<
+               std::is_constructible<TType, TArgs...>::value, bool>::type>
   Optional(TArgs&&... args) {
-    this->data_ptr = CreateStackPtr(data_, std::forward(args)...)
+    data_ptr_ = CreateStackPtr<TType>(data_, std::forward(args)...);
   }
 
   // Moves |other| instance to this one if it supports a move ctor.
-  template<typename std::enable_if<std::is_constructible<TType, TType&&>>::type>
-  Optional(Optional<TType>&& other) {
+  template<typename U = TType,
+           typename = typename std::enable_if<
+               std::is_constructible<TType, U&&>::value, bool>::type>
+  Optional(Optional<U>&& other) {
     if (other.data_ptr_) {
-      this->data_ptr = CreateStackPtr(this->data_, std::move(*other.data_ptr_));
+      data_ptr_ = CreateStackPtr<TType>(data_, std::move(*other.data_ptr_));
       other.data_ptr_.reset();
     }
   }
-  template<typename std::enable_if<std::is_constructible<TType, TType&&>>::type>
-  Optional(Optional<TType>&& other) {
+  template<typename U = TType,
+           typename = typename std::enable_if<
+               std::is_constructible<TType, U&&>::value, bool>::type>
+  Optional& operator=(Optional<U>&& other) {
     if (other.data_ptr_) {
-      this->data_ptr = CreateStackPtr(this->data_, std::move(*other.data_ptr_));
+      data_ptr_ = CreateStackPtr<TType>(data_, std::move(*other.data_ptr_));
       other.data_ptr_.reset();
     }
     return *this;
   }
-  template<typename std::enable_if<std::is_constructible<TType, TType&&>>::type>
-  Optional(TType&& other) {
-    this->data_ptr = CreateStackPtr(this->data_, std::move(other));
-    return *this;
+  template<typename U = TType,
+           typename = typename std::enable_if<
+               std::is_constructible<TType, U&&>::value &&
+               std::is_rvalue_reference<U&&>::value, bool>::type>
+  Optional(U&& other) {
+    data_ptr_ = CreateStackPtr<TType, U>(data_, std::move(other));
   }
-
 
   // Copies |other| to this one if it supports a copy ctor.
-  template<typename std::enable_if<std::is_constructible<TType, const TType&>>::type>
+  template<typename U = TType,
+           typename = typename std::enable_if<
+               std::is_constructible<TType, const U&>::value, bool>::type>
   Optional(const Optional<TType>& other) {
     if (other.data_ptr_) {
-      this->data_ptr = CreateStackPtr(this->data_, *other.data_ptr_);
+      data_ptr_ = CreateStackPtr<TType>(data_, *other.data_ptr_);
     }
   }
-  template<typename std::enable_if<std::is_constructible<TType, const TType&>>::type>
+  template<typename U = TType,
+           typename = typename std::enable_if<
+               std::is_constructible<TType, const U&>::value, bool>::type>
   Optional& operator=(const Optional<TType>& other) {
     if (other.data_ptr_) {
-      this->data_ptr = CreateStackPtr(this->data_, *other.data_ptr_);
+      data_ptr_ = CreateStackPtr<TType>(data_, *other.data_ptr_);
     }
     return *this;
   }
-  template<typename std::enable_if<std::is_constructible<TType, const TType&>>::type>
+  template<typename U = TType,
+           typename = typename std::enable_if<
+               std::is_constructible<TType, const U&>::value, bool>::type>
   Optional& operator=(const TType& other) {
-    this->data_ptr = CreateStackPtr(this->data_, *other.data_ptr_);
+    data_ptr_ = CreateStackPtr<TType>(data_, *other.data_ptr_);
     return *this;
   }
   
   // Operators.
   operator bool() {
-    return !!data_;
+    return !!data_ptr_;
   }
 
   const TType* operator->() const {
-    std::assert(!!data_);
-    return data_.get();
+    assert(!!data_ptr_);
+    return data_ptr_.get();
   }
 
   TType* operator->() {
-    std::assert(!!data_);
-    return data_.get();
+    assert(!!data_);
+    return data_ptr_.get();
   }
 
   const TType& operator*() const & {
-    std::assert(!!data_);
-    return *data_;
+    assert(!!data_ptr_);
+    return *data_ptr_;
   }
 
   TType& operator*() & {
-    std::assert(!!data_);
-    return *data_;
+    assert(!!data_ptr_);
+    return *data_ptr_;
   }
 
   TType&& operator*() && {
-    std::assert(!!data_);
+    assert(!!data_ptr_);
+    return *data_ptr_;
   }
 
   bool has_value() const {
-    return !!data_;
+    return !!data_ptr_;
   }
 
-  const TValue& value() const & {
-    return *this;
+  const TType& value() const & {
+    return *data_ptr_;
   }
 
-  TValue& value() & {
-    return *this;
+  TType& value() & {
+    return *data_ptr_;
   }
 
-  TValue&& value() && {
-    return *this;
+  TType&& value() && {
+    return *data_ptr_;
+  }
+
+  void reset() {
+    data_ptr_.reset();
   }
 
  private:
-  class StackDeleter {
-   public:
-    void operator()(TType* ptr) { ptr->~TType(); }
-  };
-  using StackPtr = std::unique_ptr<TType, StackDeleter>;
-
   uint8_t data_[sizeof(TType)];
-  StackPtr data_ptr_;
+  StackPtr<TType> data_ptr_;
 };
 
 }  // namespace util

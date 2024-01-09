@@ -1,194 +1,142 @@
 #ifndef F4036F42_4CE4_4B4C_95CD_C0E1E2533545
 #define F4036F42_4CE4_4B4C_95CD_C0E1E2533545
 
+#include <array>
 #include <atomic>
 #include <mutex>
+#include <thread>
+#include <type_traits>
 #include <vector>
 
-#include "util/include/compiler_hints.hpp"
 #include "memory/include/optional.hpp"
+#include "threading/parallel_circular_buffer.hpp"
+#include "util/include/compiler_hints.hpp"
 
 namespace util {
 
-// This class defines a "nearly-lockless" FIFO queue. Specifically, contention
-// for a mutex may only occur when the underlying |data_| queue is full. For
-// the expected use case where nowhere near |TFifoElementCount| elements are
-// never queued up at the same time, this queue should never have contention for
-// a mutex.
-template<typename TDataType,
-         size_t TFifoElementCount = 1024 * sizeof(TDataType)>
-class NearlyLocklessFifo{
+// This class defines a fully parallelized multi-producer multi-consumer
+// "nearly-lockless" FIFO queue. Specifically, contention for a mutex may only
+// occur when the underlying |data_| queue is full. For the expected use case
+// where nowhere near |TFifoElementCount| elements are ever queued up at the
+// same time, but the queue is never empty, this implementation should never
+// lock a mutex. 
+template<typename TDataType, size_t TFifoElementCount = 1024>
+class NearlyLocklessFifo : public BufferObserver {
  public:
- 	NearlyLocklessFifo();
+  // This class can only be used with movable types.
+	static_assert(std::is_move_constructible<TDataType>::value);
+
+ 	NearlyLocklessFifo() : data_(this) {};
+	~NearlyLocklessFifo() override = default;
+
+	NearlyLocklessFifo(const NearlyLocklessFifo& other) = delete;
+	NearlyLocklessFifo(NearlyLocklessFifo&& other) = delete;
 
  	// Standard Queue operations.
 	void Enqueue(TDataType&& data);
 	Optional<TDataType> Dequeue();
 
+	// Accessors
+	bool is_empty() {
+	  if (!data_.is_empty()) {
+			return false;
+		}
+
+		std::unique_lock<std::mutex> lock(overflow_queue_lock_);
+		return overflow_queue_.empty();
+	}
+
+ private:
 	// Maintanance is expected to be performed regularly on the underlying queue.
 	// Else, |TDataType|s may eventually stop flowing.
 	bool queue_needs_maintanance() const;
 	bool MaintainQueue();
 
-	bool is_empty() const {
-		return elements_read_so_far_.load() == elements_written_so_far_.load();
-	}
-
- private:
-	// Thread-safe wrapper around TDataType. It's expected that |data_lock_| will
-	// only be locked in edge cases where the queue is near-empty, at which point
-	// the performance hit of locking a mutex will be insignificant.
-	class Data {
-	 public:
-	 	bool StoreData(TDataType& data);
-	 	Optional<TDataType> TakeData();
-
-	 private:
-		std::mutex data_lock_;
-		Optional<TDataType> data_;
-	};
-
-	// Returns the percentage of |data_| in use.
-	double array_usage() const;
-
 	// Thread-safe accessors for |data_|.
- 	bool TryPushToArray(TDataType&& data);
+ 	bool TryPushToArray(TDataType& data);
  	virtual Optional<TDataType> TryPopFromArray();
+
+	// BufferObserver implementation.
+	void OnEnqueueComplete() override {
+		waiting_for_writing_cv_.notify_all();
+	}
 
  	// Queue of tasks to execute that don't fit in |data_|. Will be dequeued and
  	// pushed to |data_| once |data_| is only half-full.
  	//
- 	// NOTE: Use Optional to support types that should or cannot be default
+ 	// NOTE: Use Optional to support types that should or cannot be trivially
  	// constructed.
  	std::vector<Optional<TDataType>> overflow_queue_;
  	std::mutex overflow_queue_lock_;
  	std::atomic_bool is_overflow_queue_flushing_{false};
  	std::atomic_bool is_overflow_queue_in_use_{false};
 
- 	// Array backing the lockless FIFO used to store tasks.
- 	std::array<Optional<TDataType>, TFifoElementCount> data_;
+	// Helper for blocking when waiting for elements to be written.
+ 	std::mutex waiting_for_writing_mutex_;
+	std::condition_variable waiting_for_writing_cv_;
 
- 	// Total number of |data_| elements read or written by completed operations so
- 	// far. Atomics are used both to ensure that read and write operations are
- 	// atomic on all systems and to ensure that different values for these values
- 	// aren't loaded from each CPU's physical cache. Size_t types are used
- 	// intentionally to allow for wrap-around.
-  std::atomic_size_t elements_read_so_far_{0};
-  std::atomic_size_t elements_written_so_far_{0};
+  std::atomic_int32_t elements_written_so_far_{ 0 };
+
+ 	// Array backing the lockless FIFO used to store tasks.
+ 	ParallelCircularBuffer<TDataType, TFifoElementCount> data_;
 };
 
 template<typename TDataType, size_t TFifoElementCount>
-bool NearlyLocklessFifo<TDataType, TFifoElementCount>::Data
-		::StoreData(TDataType& data) {
-	std::lock_guard<std::mutex> lock(data_lock_);
-
-	if (UNLIKELY(data_)) {
-		return false;
-	}
-
-	data_ = std::move(data);
-}
-
-template<typename TDataType, size_t TFifoElementCount>
-Optional<TDataType> NearlyLocklessFifo<TDataType, TFifoElementCount>
-		::Data::TakeData() {
-	std::lock_guard<std::mutex> lock(data_lock_);
-
-	if (UNLIKELY(!data)) {
-		return nullopt;
-	}
-
-	return std::move(data_);
-	data_.reset();
-}
-
-template<typename TDataType, size_t TFifoElementCount>
-void NearlyLocklessFifo<TDataType, TFifoElementCount>::Enqueue(TDataType&& data) {
-	if (!TryPushToArray(std::forward(data))) {
+void NearlyLocklessFifo<TDataType, TFifoElementCount>::Enqueue(
+		TDataType&& data) {
+	if (data_.TryEnqueue(data)) {
 		return;
 	}
 
+	const int so_far = elements_written_so_far_.load(std::memory_order_relaxed);
+	constexpr int check_interval = TFifoElementCount / 16;
+	if (so_far % check_interval == 0) {
+		MaintainQueue();
+		
+		if (data_.TryEnqueue(data)) {
+			return;
+		}
+	}
+
 	std::lock_guard<std::mutex> lock(overflow_queue_lock_);
-	overflow_queue_.push_back(std::forward(data));
+	overflow_queue_.emplace_back(std::move(data));
 }
 
 template<typename TDataType, size_t TFifoElementCount>
 Optional<TDataType> NearlyLocklessFifo<TDataType, TFifoElementCount>
 		::Dequeue() {
-	return TryPopFromArray();
+	auto result = data_.Dequeue();
+	if(!!result) {
+		return result;
+	}
+	
+	if (queue_needs_maintanance()) {
+		MaintainQueue();
+		return data_.Dequeue();
+	}
+
+	// Wait for any writing data to finish.
+	while (!data_.is_empty()) {
+		result = data_.Dequeue();
+		if (!result) {
+			std::unique_lock<std::mutex> lock(waiting_for_writing_mutex_);
+			waiting_for_writing_cv_.wait_for(lock, std::chrono::microseconds(50));
+		}
+	}
+
+	return result;
 }
 
 template<typename TDataType, size_t TFifoElementCount>
 bool NearlyLocklessFifo<TDataType, TFifoElementCount>
 		::queue_needs_maintanance() const {
-	return array_usage() < 0.5 &&
-			is_overflow_queue_in_use_.load() &&
-			!is_overflow_queue_flushing_.load();
-}
-
-template<typename TDataType, size_t TFifoElementCount>
-double NearlyLocklessFifo<TDataType, TFifoElementCount>::array_usage() const {
-	const size_t local_read =
-			elements_read_so_far_.load(std::memory_order_relaxed);
-	const size_t local_write =
-			elements_written_so_far_.load(std::memory_order_relaxed);
-
-	return static_cast<double>(local_write - local_read) / TFifoElementCount;
-}
-
-template<typename TDataType, size_t TFifoElementCount>
-bool NearlyLocklessFifo<TDataType, TFifoElementCount>
-		::TryPushToArray(TDataType&& element) {
-	const size_t local_read =
-			elements_read_so_far_.load(std::memory_order_relaxed) % TFifoElementCount;
-	const size_t local_write =
-			elements_written_so_far_.load(std::memory_order_relaxed) %
-					TFifoElementCount;
-
-	if (local_read - local_write == 1) {
-		return false;
-	}
-
-	// Addresses a race condition. Another thread already claimed this index of
-	// the array, so try again.
-	if (!elements_written_so_far_.compare_exchange_strong(
-		  		local_write, local_write + 1, std::memory_order_relaxed,
-		  		std::memory_order_relaxed)) {
-		return TryPushToArray(std::forward(element));
-	}
-
-	Data& data = data_[local_write];
-	return data.StoreData(std::forward(element));
-}
-
-template<typename TDataType, size_t TFifoElementCount>
-Optional<TDataType> NearlyLocklessFifo<TDataType, TFifoElementCount>
-		::TryPopFromArray() {
-	const size_t local_read =
-			elements_read_so_far_.load(std::memory_order_relaxed) % TFifoElementCount;
-	const size_t local write =
-			elements_written_so_far_.load(std::memory_order_relaxed) %
-					TFifoElementCount;
-
-	if (local_read == local_write) { 
-		return absl::nullopt;
-	}
-
-	elements_read_so_far_.compare_exchange_strong(
-		  local_read, local_read + 1, std::memory_order_relaxed,
-		  std::memory_order_relaxed);
-	if (!success) {
-		std::this_thread::yield();
-		return TryReadFromArray();
-	}
-
-	Data& data = data_[local_read];
-	return data.TakeData();
+	return is_overflow_queue_in_use_.load(std::memory_order_relaxed) &&
+			!is_overflow_queue_flushing_.load(std::memory_order_relaxed);
 }
 
 template<typename TDataType, size_t TFifoElementCount>
 bool NearlyLocklessFifo<TDataType, TFifoElementCount>::MaintainQueue() {
-	if (LIKELY(!queue_needs_maintanance())) {
+	if (!queue_needs_maintanance()) {
 		return false;
 	}
 
@@ -224,7 +172,7 @@ bool NearlyLocklessFifo<TDataType, TFifoElementCount>::MaintainQueue() {
 	auto it2 = overflow_queue_.begin();
 	if (it == local_overflow_queue.end()) {
 		for (;it2 != overflow_queue_.end(); it2++) {
-			if (!TryPushToArray(*it2)) {
+			if (!TryPushToArray(it2->value())) {
 				break;
 			}
 		}
@@ -238,9 +186,9 @@ bool NearlyLocklessFifo<TDataType, TFifoElementCount>::MaintainQueue() {
 	overflow_queue_.swap(local_overflow_queue);
 
 	if (overflow_queue_.empty()) {
-		is_overflow_queue_in_use_.store(false);
+		is_overflow_queue_in_use_.store(false, std::memory_order_relaxed);
 	}
-	is_overflow_queue_flushing_.store(false);
+	is_overflow_queue_flushing_.store(false, std::memory_order_relaxed);
 
 	return true;
 }

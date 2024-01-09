@@ -55,12 +55,6 @@ class MultithreadedTaskRunner : public TaskRunner {
 
  	NearlyLocklessFifo<Task, TFifoElementCount> task_queue_;
 
- 	// Used to synchronize around calling NearlyLocklessFifo::MaintainQueue().
- 	// NOTE: uint32_t is used to allow wrap-around to 0 for long-running task
- 	// runner instances.
- 	std::atomic_uint32_t execution_call_count_{0};
- 	constexpr int maintain_queue_call_frequency_ = TFifoElementCount / 8;
-
 	// Mutex used for the condition variable for waiting when no work is
 	// available. In the expected case, this should never be used.
 	std::mutex queue_empty_mutex_;
@@ -95,7 +89,7 @@ void MultithreadedTaskRunner<TFifoElementCount>::LoopExecution() {
 		while (!TryExecuteTask()) {
 			// NOTE: Do not use std::condition_variable as would introduce contention
 			// for a mutex.
-			std::this_thread.sleep_for(std::chrono::milliseconds(10));
+			std::this_thread.sleep_for(std::chrono::microseconds(10));
 		}
 	}
 
@@ -131,13 +125,6 @@ bool MultithreadedTaskRunner<TFifoElementCount>::IsRunningOnTaskRunner() const {
 
 template<size_t TFifoElementCount>
 bool MultithreadedTaskRunner<TFifoElementCount>::TryExecuteTask() {
-	// Periodically check if |task_queue_| needs to be maintained, but don't do it
-	// too often as the operation isn't free.
-	if (!(execution_call_count_.fetch_add(1) % maintain_queue_call_frequency_) &&
-		  task_queue_.MaintainQueue()) {
-		return true;
-	}
-
 	return TryExecuteQueueTask();
 }
 
