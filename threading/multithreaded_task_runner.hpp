@@ -1,14 +1,16 @@
 #ifndef D56B62A1_1E8A_4102_B97A_345B93505BE1
 #define D56B62A1_1E8A_4102_B97A_345B93505BE1
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <future>
+#include <thread>
 #include <utility>
 #include <vector>
 
-#include "threading/include/task_runner.hpp"
 #include "threading/include/nearly_lockless_fifo.hpp"
+#include "threading/include/task_runner.hpp"
 
 namespace util {
 
@@ -46,7 +48,7 @@ class MultithreadedTaskRunner : public TaskRunner {
 
 	// Tracks what threads are currently being used by this TaskRunner.
 	std::vector<std::thread::id> executing_threads_;
- 	std::mutex executing_threads_lock_;
+ 	mutable std::mutex executing_threads_lock_;
  	std::atomic_bool is_running_{false};
 
 	// Set of tasks posted with PostTaskWithDelay().
@@ -72,9 +74,9 @@ MultithreadedTaskRunner<TFifoElementCount>::MultithreadedTaskRunner() {
 
 template<size_t TFifoElementCount>
 void MultithreadedTaskRunner<TFifoElementCount>::LoopExecution() {
-	{
-		const auto current_id = std::this_thread::get_id();
+	const auto current_id = std::this_thread::get_id();
 
+	{
 		std::lock_guard<std::mutex> lock(executing_threads_lock_);
 		assert(std::find_if(executing_threads_.begin(), executing_threads_.end(), 
 				[current_id](const std::thread::id id) {
@@ -89,7 +91,7 @@ void MultithreadedTaskRunner<TFifoElementCount>::LoopExecution() {
 		while (!TryExecuteTask()) {
 			// NOTE: Do not use std::condition_variable as would introduce contention
 			// for a mutex.
-			std::this_thread.sleep_for(std::chrono::microseconds(10));
+			std::this_thread::sleep_for(std::chrono::microseconds(10));
 		}
 	}
 
@@ -106,7 +108,7 @@ void MultithreadedTaskRunner<TFifoElementCount>::LoopExecution() {
 		assert(it != executing_threads_.end());
 		executing_threads_.erase(it);
 
-		id (executing_threads_.empty()) {
+		if (executing_threads_.empty()) {
 			is_running_.store(false);
 		}
 	}
@@ -125,7 +127,13 @@ bool MultithreadedTaskRunner<TFifoElementCount>::IsRunningOnTaskRunner() const {
 
 template<size_t TFifoElementCount>
 bool MultithreadedTaskRunner<TFifoElementCount>::TryExecuteTask() {
-	return TryExecuteQueueTask();
+	auto task = task_queue_.Dequeue();
+	if (!task) {
+		return false;
+	}
+
+	task.value()();
+	return true;
 }
 
 template<size_t TFifoElementCount>
@@ -156,7 +164,7 @@ void MultithreadedTaskRunner<TFifoElementCount>::EnqueDelayedTasks() {
 			// TODO: Manually sort these because we know the pre-existing tasks are
 			// already sorted.
 			std::sort(delayed_tasks_.rbegin(), delayed_tasks_.rend(),
-					[](DelayedTask first, DelayedTask second) {
+					[](const DelayedTask& first, const DelayedTask& second) {
 				return first.second < second.second;
 			});
 
@@ -166,10 +174,11 @@ void MultithreadedTaskRunner<TFifoElementCount>::EnqueDelayedTasks() {
 			auto it = delayed_tasks_.rbegin();
 			for (; it != delayed_tasks_.rend(); it++) {
 				if (it->second <= time_now) {
-					PostTask(std::move(it->first));
+					Task& task = it->first;
+					PostTask(std::move(task));
 				}
 			}
-			delayed_tasks_.erase(delayed_tasks_.rbegin(), it);
+			delayed_tasks_.erase(it.base(), delayed_tasks_.end());
 		}
 	}
 

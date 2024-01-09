@@ -1,8 +1,6 @@
 #ifndef AD8A98C3_4517_4C9F_B52A_75E6C6717116
 #define AD8A98C3_4517_4C9F_B52A_75E6C6717116
 
-#include "include/task_runner.hpp"
-
 namespace util {
 
 // Replacement for a std::weak_ptr that doesn't rely on std::shared_ptr.
@@ -21,7 +19,7 @@ class WeakPtr {
             typename = typename std::enable_if<
                 std::is_convertible<U*, T*>::value>::type>
   WeakPtr(const WeakPtr<U>& other)
-: ptr_(other.ptr_), is_valid_(other.is_valid) {}
+  : ptr_(other.ptr_), is_valid_(other.is_valid) {}
 
   template <typename U,
             typename = typename std::enable_if<

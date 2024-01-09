@@ -26,11 +26,14 @@ target_sources(cpp_utils
         threading/include/task_runner.hpp
         util/include/bind.hpp
         util/include/compiler_hints.hpp
+        util/include/execution_timer.hpp
         util/include/logger.hpp
     PRIVATE
         memory/stack_ptr.hpp
         threading/multithreaded_task_runner.hpp
+        threading/parallel_circular_buffer.hpp
         threading/single_threaded_task_runner.hpp
+        util/execution_timer.cpp
         util/logger_impl.cpp
         util/logger_impl.hpp
 )

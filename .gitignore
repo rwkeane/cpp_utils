@@ -33,3 +33,6 @@
 
 # External utilities
 *.vscode
+
+# Build files:
+build/*

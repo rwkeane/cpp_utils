@@ -2,22 +2,13 @@
 #define A945298F_4894_40C9_A195_222F7928487B
 
 #include <atomic>
+#include <cassert>
 #include <cstddef>
 
 #include "memory/include/optional.hpp"
 #include "util/include/compiler_hints.hpp"
 
 namespace util {
-
-// Observer for the below class.
-class BufferObserver {
-  public:
-  virtual ~BufferObserver() = default;
-
-  // Called when the queue has new elements written and available for reading.
-  // Must be thread safe.
-  virtual void OnEnqueueComplete() = 0;
-};
 
 // This class defines a fully lockless multi-producer, multi-consumer circular
 // buffer. After construction, TryEnqueue() and Dequeue() may be called from any
@@ -26,7 +17,9 @@ class BufferObserver {
 // NOTE: If more than 1 producer or consumer call functions of this class
 // simultaneously, the order of execution of these calls is not guaranteed. It
 // is guaranteed that if elements A and B are pushed to the buffer by some
-// thread X and read by some thread T, A will be read before B.
+// thread X and read by some thread T, A will be read before B. In other words,
+// if this class is used with a single producer and single consumer, it will
+// behave exactly as a "normal" FIFO queue.
 template<typename TDataType, size_t TFifoElementCount = 1024>
 class ParallelCircularBuffer{
  public:
@@ -34,8 +27,7 @@ class ParallelCircularBuffer{
 	static_assert(std::is_move_constructible<TDataType>::value);
   static_assert(TFifoElementCount >= size_t{2});
 
- 	explicit ParallelCircularBuffer(BufferObserver* observer)
-    : observer_(observer) {
+ 	explicit ParallelCircularBuffer() {
     for (int i = 1; i < data_.size() - 1; i++) {
       data_[i].SetLinkedDatas(&data_[i - 1], &data_[i + 1]);
     }
@@ -111,8 +103,6 @@ class ParallelCircularBuffer{
     Data* next_ptr_ = nullptr;
     Data* last_ptr_ = nullptr;
 	};
-
-  BufferObserver* observer_;
 
  	// Array backing the lockless FIFO used to store tasks.
  	std::array<Data, TFifoElementCount> data_;
@@ -193,10 +183,6 @@ bool ParallelCircularBuffer<TDataType, TFifoElementCount>::TryEnqueue(
               break;
         }
         has_updated = true;
-      }
-
-      if (observer_ && has_updated) {
-        observer_->OnEnqueueComplete();
       }
       
       remaining_elements_.fetch_add(1, std::memory_order_relaxed);

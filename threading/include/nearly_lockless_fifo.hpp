@@ -21,13 +21,13 @@ namespace util {
 // same time, but the queue is never empty, this implementation should never
 // lock a mutex. 
 template<typename TDataType, size_t TFifoElementCount = 1024>
-class NearlyLocklessFifo : public BufferObserver {
+class NearlyLocklessFifo {
  public:
-  // This class can only be used with movable types.
+  // Use SFINAR to ensure this class can only be used with movable types.
 	static_assert(std::is_move_constructible<TDataType>::value);
 
- 	NearlyLocklessFifo() : data_(this) {};
-	~NearlyLocklessFifo() override = default;
+ 	NearlyLocklessFifo() = default;
+	~NearlyLocklessFifo() = default;
 
 	NearlyLocklessFifo(const NearlyLocklessFifo& other) = delete;
 	NearlyLocklessFifo(NearlyLocklessFifo&& other) = delete;
@@ -56,11 +56,6 @@ class NearlyLocklessFifo : public BufferObserver {
  	bool TryPushToArray(TDataType& data);
  	virtual Optional<TDataType> TryPopFromArray();
 
-	// BufferObserver implementation.
-	void OnEnqueueComplete() override {
-		waiting_for_writing_cv_.notify_all();
-	}
-
  	// Queue of tasks to execute that don't fit in |data_|. Will be dequeued and
  	// pushed to |data_| once |data_| is only half-full.
  	//
@@ -70,10 +65,6 @@ class NearlyLocklessFifo : public BufferObserver {
  	std::mutex overflow_queue_lock_;
  	std::atomic_bool is_overflow_queue_flushing_{false};
  	std::atomic_bool is_overflow_queue_in_use_{false};
-
-	// Helper for blocking when waiting for elements to be written.
- 	std::mutex waiting_for_writing_mutex_;
-	std::condition_variable waiting_for_writing_cv_;
 
   std::atomic_int32_t elements_written_so_far_{ 0 };
 
@@ -113,15 +104,6 @@ Optional<TDataType> NearlyLocklessFifo<TDataType, TFifoElementCount>
 	if (queue_needs_maintanance()) {
 		MaintainQueue();
 		return data_.Dequeue();
-	}
-
-	// Wait for any writing data to finish.
-	while (!data_.is_empty()) {
-		result = data_.Dequeue();
-		if (!result) {
-			std::unique_lock<std::mutex> lock(waiting_for_writing_mutex_);
-			waiting_for_writing_cv_.wait_for(lock, std::chrono::microseconds(50));
-		}
 	}
 
 	return result;

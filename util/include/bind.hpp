@@ -6,7 +6,7 @@
 namespace util {
 
 // Binding an instance function to a non-weak pointer.
-template<typename TClass,\
+template<typename TClass,
 				 typename TPointerType,
 				 typename... TArgs,
 				 typename... TExtraArgs>
@@ -20,7 +20,10 @@ std::packaged_task<void(TExtraArgs...)> Bind(
 }
 
 // Binding an instance function to a smart pointer.
-template<typename TClass, template<typename> class TPtrWrapper, typename... TArgs, typename... TExtraArgs>
+template<typename TClass,
+				 template<typename> class TPtrWrapper,
+				 typename... TArgs,
+				 typename... TExtraArgs>
 std::packaged_task<void(TExtraArgs...)> Bind<TArgs...>(
 		void (TClass::*func)(TArgs... intl_args),
 		TPtrWrapper<TClass>&& ptr,

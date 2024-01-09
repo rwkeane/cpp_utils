@@ -34,11 +34,11 @@ namespace util {
 #define INITIALIZE_LOGGER(info_stream, error_stream) \
     util::Logger::CreateGlobalInstance(std::move(info_stream), \
                                        std::move(error_stream))
-#define LOG_UTIL_VERBOSE UTIL_STREAM_HELPER(Logger::LogLevel::kVerbose)
-#define LOG_UTIL_INFO UTIL_STREAM_HELPER(Logger::LogLevel::kVerbose)
-#define LOG_UTIL_WARNING UTIL_STREAM_HELPER(Logger::LogLevel::kVerbose)
-#define LOG_UTIL_ERROR UTIL_STREAM_HELPER(Logger::LogLevel::kVerbose)
-#define LOG_UTIL_CRITICAL UTIL_STREAM_HELPER(Logger::LogLevel::kVerbose)
+#define LOG_UTIL_VERBOSE UTIL_STREAM_HELPER(kVerbose)
+#define LOG_UTIL_INFO UTIL_STREAM_HELPER(kInfo)
+#define LOG_UTIL_WARNING UTIL_STREAM_HELPER(kWarning)
+#define LOG_UTIL_ERROR UTIL_STREAM_HELPER(kError)
+#define LOG_UTIL_CRITICAL UTIL_STREAM_HELPER(kCritical)
 
 #else
 
@@ -52,8 +52,11 @@ namespace util {
 #endif
 
 #define UTIL_STREAM_HELPER(level_enum) \
+  UTIL_STREAM_HELPER_IMPL(level_enum, __FILE__, __LINE__)
+
+#define UTIL_STREAM_HELPER_IMPL(level_enum, file, line) \
   internal::Voidify() & (Logger::CreateLogMessage( \
-      Logger::LogLevel::level_enum, __FILE__,__LINE__).stream())
+      Logger::LogLevel::level_enum, file, line).stream())
 
 // Top-level of the class responsible for handling thread-safe logging. Children
 // must complete its implementation and handle reading to the provided streams.
