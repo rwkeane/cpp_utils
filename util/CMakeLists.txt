@@ -1,0 +1,11 @@
+target_sources(cpp_utils
+    PUBLIC
+        include/bind.hpp
+        include/compiler_hints.hpp
+        include/execution_timer.hpp
+        include/logger.hpp
+    PRIVATE
+        execution_timer.cpp
+        logger_impl.cpp
+        logger_impl.hpp
+)

@@ -90,9 +90,9 @@ class Logger {
     LogMessage(const LogMessage& other) = delete;
     LogMessage(LogMessage&& other)
         : level_(other.level_),
+          file_(std::move(other.file_)),
           line_(other.line_),
           thread_id_(other.thread_id_),
-          file_(std::move(other.file_)),
           stream_(std::move(other.stream_)) {
       other.IsDoneLogging();
     }

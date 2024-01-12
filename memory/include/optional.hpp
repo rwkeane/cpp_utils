@@ -73,7 +73,7 @@ class Optional {
   template<typename U = TType,
            typename = typename std::enable_if<
                std::is_constructible<TType, const U&>::value, bool>::type>
-  Optional(const Optional<TType>& other) {
+  Optional(const Optional<U>& other) {
     if (other.data_ptr_) {
       data_ptr_ = CreateStackPtr<TType>(data_, *other.data_ptr_);
     }
@@ -81,7 +81,7 @@ class Optional {
   template<typename U = TType,
            typename = typename std::enable_if<
                std::is_constructible<TType, const U&>::value, bool>::type>
-  Optional& operator=(const Optional<TType>& other) {
+  Optional& operator=(const Optional<U>& other) {
     if (other.data_ptr_) {
       data_ptr_ = CreateStackPtr<TType>(data_, *other.data_ptr_);
     }
@@ -90,14 +90,18 @@ class Optional {
   template<typename U = TType,
            typename = typename std::enable_if<
                std::is_constructible<TType, const U&>::value, bool>::type>
-  Optional& operator=(const TType& other) {
-    data_ptr_ = CreateStackPtr<TType>(data_, *other.data_ptr_);
+  Optional& operator=(const U& other) {
+    data_ptr_ = CreateStackPtr<TType>(data_, other);
     return *this;
   }
   
   // Operators.
-  operator bool() {
+  operator bool() const {
     return !!data_ptr_;
+  }
+
+  bool operator!() const {
+    return !data_ptr_;
   }
 
   const TType* operator->() const {

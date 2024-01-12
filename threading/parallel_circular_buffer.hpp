@@ -1,6 +1,7 @@
 #ifndef A945298F_4894_40C9_A195_222F7928487B
 #define A945298F_4894_40C9_A195_222F7928487B
 
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <cstddef>
@@ -28,7 +29,7 @@ class ParallelCircularBuffer{
   static_assert(TFifoElementCount >= size_t{2});
 
  	explicit ParallelCircularBuffer() {
-    for (int i = 1; i < data_.size() - 1; i++) {
+    for (size_t i = 1; i < data_.size() - 1; i++) {
       data_[i].SetLinkedDatas(&data_[i - 1], &data_[i + 1]);
     }
     Data* first = &data_[0];
@@ -175,14 +176,12 @@ bool ParallelCircularBuffer<TDataType, TFifoElementCount>::TryEnqueue(
       // |local_read->next()| until |local_read| is out of sync with
       // |read_element| (meaning some other thread got here first) or it's
       // updated all the way to the current write ptr.
-      bool has_updated = false;
       while(!local_write->is_written_to()) {
         if (!read_element_.compare_exchange_strong(
             local_write, local_write->next(), std::memory_order_relaxed,
             std::memory_order_relaxed)) {
               break;
         }
-        has_updated = true;
       }
       
       remaining_elements_.fetch_add(1, std::memory_order_relaxed);
